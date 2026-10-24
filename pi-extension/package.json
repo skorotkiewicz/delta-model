@@ -1,0 +1,17 @@
+{
+  "name": "pi-qwen-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prepare Pi prompts with a local Qwen proxy",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
