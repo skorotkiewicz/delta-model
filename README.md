@@ -12,11 +12,21 @@ extension with `pi -e ./pi-extension/index.ts` after starting the server.
 
 ## Run
 
-Use Python 3.11 or newer with SQLite FTS5 support. The existing `.venv` has the model dependencies. For a new environment, install
-`requirements.txt` first. HTTP, SQLite, and tests use the Python standard library.
+Use Python 3.11 or newer with SQLite FTS5 support. On a fresh clone:
 
 ```sh
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python download_model.py
 .venv/bin/python serve.py --port 8765
+```
+
+The downloader fetches the [Qwen3-0.6B model](https://huggingface.co/Qwen/Qwen3-0.6B)
+
+```sh
+# Optional: select a destination or pin a model revision.
+.venv/bin/python download_model.py --output /path/to/qwen --revision COMMIT_HASH
+.venv/bin/python serve.py --model /path/to/qwen --port 8765
 ```
 
 The weights load once at startup, entirely from local files. CPU inference uses
