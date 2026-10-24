@@ -192,7 +192,8 @@ class Resources:
 
 
 class Qwen:
-    def __init__(self, model_path, device="auto", threads=2, max_new_tokens=256, max_input_tokens=4096):
+    def __init__(self, model_path, device="auto", threads=2, max_new_tokens=256,
+                 max_input_tokens=4096, thinking_budget=1024):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -202,6 +203,7 @@ class Qwen:
             "cpu" if device == "auto" else device)
         self.max_new_tokens = max_new_tokens
         self.max_input_tokens = max_input_tokens
+        self.thinking_budget = thinking_budget
         self.tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             str(model_path), local_files_only=True,
@@ -210,20 +212,42 @@ class Qwen:
 
     def generate(self, messages):
         text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=True)
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         if inputs.input_ids.shape[1] > self.max_input_tokens:
             raise RequestError("Context exceeds the model input budget. Shorten message or saved context.", 413)
+        sampling = dict(do_sample=True, temperature=0.6, top_p=0.95, top_k=20,
+                        repetition_penalty=1.05, pad_token_id=self.tokenizer.eos_token_id)
         with self.torch.inference_mode():
-            output = self.model.generate(
-                **inputs, max_new_tokens=self.max_new_tokens, do_sample=False,
-                repetition_penalty=1.05, pad_token_id=self.tokenizer.eos_token_id,
+            end_thinking = self.tokenizer.convert_tokens_to_ids("</think>")
+            thought = self.model.generate(
+                **inputs, max_new_tokens=self.thinking_budget,
+                eos_token_id=[end_thinking, self.tokenizer.eos_token_id], **sampling,
             )
-        return self.tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
+            finished = thought[0, -1].item() == end_thinking
+            if thought[0, -1].item() == self.tokenizer.eos_token_id:
+                thought = thought[:, :-1]
+            suffix = "\n\n" if finished else (
+                "\n\nFinish thinking and produce the requested JSON now.\n</think>\n\n")
+            suffix_ids = self.tokenizer(suffix, add_special_tokens=False,
+                                        return_tensors="pt").input_ids.to(self.device)
+            final_inputs = self.torch.cat([thought, suffix_ids], dim=-1)
+            LOG.info("Thinking tokens: %s; budget reached: %s",
+                     thought.shape[1] - inputs.input_ids.shape[1], not finished)
+            output = self.model.generate(
+                input_ids=final_inputs, attention_mask=self.torch.ones_like(final_inputs),
+                max_new_tokens=self.max_new_tokens, **sampling,
+            )
+        # Only the final completion enters the tool loop, history or HTTP response.
+        return self.tokenizer.decode(output[0][final_inputs.shape[1]:], skip_special_tokens=True).strip()
 
 
 def parse_output(raw):
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.S).strip()
+    if "</think>" in raw:
+        raw = raw.rsplit("</think>", 1)[1]
+    if "<think>" in raw:
+        raise ValueError("Thinking ended without a final response")
+    raw = raw.strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
     data = json.loads(raw)
@@ -386,7 +410,9 @@ def handler_for(preparer):
 
         def do_GET(self):
             if self.path == "/health":
-                self.send_json(200, {"status": "ok", "model": "Qwen3-0.6B", "device": preparer.model.device})
+                self.send_json(200, {"status": "ok", "model": "Qwen3-0.6B", "device": preparer.model.device,
+                                     "thinking_enabled": True,
+                                     "thinking_budget": getattr(preparer.model, "thinking_budget", 1024)})
             else:
                 self.send_json(404, {"error": "Use GET /health or POST /prepare."})
 
@@ -438,13 +464,18 @@ def main():
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--thinking-budget", type=int, default=1024,
+                        help="Maximum thinking tokens before generating final JSON, default: 1024")
     args = parser.parse_args()
     if args.threads < 1 or not 32 <= args.max_new_tokens <= 1024:
         parser.error("threads must be positive; max-new-tokens must be between 32 and 1024")
+    if not 32 <= args.thinking_budget <= 8192:
+        parser.error("thinking-budget must be between 32 and 8192")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     LOG.info("Loading local Qwen weights from %s", args.model)
-    model = Qwen(args.model, args.device, args.threads, args.max_new_tokens)
+    model = Qwen(args.model, args.device, args.threads, args.max_new_tokens,
+                 thinking_budget=args.thinking_budget)
     preparer = Preparer(model, Store(args.db), Resources(args.resources))
     server = ThreadingHTTPServer((args.host, args.port), handler_for(preparer))
     LOG.info("Ready at http://%s:%s on %s", args.host, args.port, model.device)

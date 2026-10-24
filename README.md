@@ -16,8 +16,13 @@ The existing `.venv` has the model dependencies. For a new environment, install
 
 The weights load once at startup, entirely from local files. CPU inference uses
 two threads and float32 by default. CUDA is selected automatically when available.
-Qwen's thinking mode is disabled to keep preparation short, following the
-[Qwen quickstart](https://qwen.readthedocs.io/en/latest/getting_started/quickstart.html).
+Qwen's thinking mode is enabled. Each model turn has up to 1024 thinking tokens,
+followed by a separate budget for the final JSON. `--thinking-budget` adjusts this
+limit. The service closes the thinking phase when the budget is reached, following
+the [Qwen thinking budget example](https://qwen.readthedocs.io/en/latest/getting_started/quickstart.html#thinking-budget).
+Thinking uses sampling at temperature 0.6, top-p 0.95, and top-k 20.
+Only final JSON enters tool history and HTTP responses. `/health` reports the
+thinking setting and budget. CPU requests take longer with thinking enabled.
 
 ```sh
 curl --silent http://127.0.0.1:8765/health
@@ -98,8 +103,9 @@ SQLite stores facts, JSON values, original requests, and prepared responses in
 `.artifacts/proxy.sqlite3`. `--db` selects a different file. This is a localhost
 prototype with no authentication. Session IDs separate data but are not credentials.
 
-Requests are limited to 32 KB. Model input is limited to 4096 tokens and generation
-to 256 tokens per turn. Oversized context returns HTTP 413 instead of silently
+Requests are limited to 32 KB. Model input is limited to 4096 tokens. Each model
+turn has up to 1024 thinking tokens plus 256 final output tokens by default.
+Oversized context returns HTTP 413 instead of silently
 truncating the request. Competing preparations return HTTP 503 with `Retry-After`.
 Invalid input returns JSON with an `error` field. If Qwen's output stays invalid,
 the service returns `status: "fallback"` with the original request and context.
@@ -115,4 +121,4 @@ session separation, input validation, fallbacks, resource boundaries, and HTTP
 responses. Test real model quality separately with the curl requests above.
 
 Other options are listed by `python serve.py --help`, including `--model`,
-`--resources`, `--device`, `--threads`, and `--max-new-tokens`.
+`--resources`, `--device`, `--threads`, `--max-new-tokens`, and `--thinking-budget`.

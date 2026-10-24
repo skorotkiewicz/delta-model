@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from http.server import ThreadingHTTPServer
 
-from serve import Preparer, RequestError, Resources, Store, handler_for, validate_request
+from serve import Preparer, RequestError, Resources, Store, handler_for, parse_output, validate_request
 
 
 class ScriptedModel:
@@ -79,6 +79,14 @@ class ServiceTests(unittest.TestCase):
         result = self.preparer("bad", "[]", "{}").prepare({"message": "Keep exactly this request."})
         self.assertEqual(result["status"], "fallback")
         self.assertEqual(result["preparation"]["prompt"], "Keep exactly this request.")
+
+    def test_thinking_is_excluded_from_parsed_response(self):
+        expected = json.loads(FINAL)
+        for prefix in ["<think>Internal planning</think>\n", "Internal planning</think>\n"]:
+            with self.subTest(prefix=prefix):
+                self.assertEqual(parse_output(prefix + FINAL), expected)
+        with self.assertRaises(ValueError):
+            parse_output("<think>Unfinished planning " + FINAL)
 
     def test_tool_limit_and_disallowed_tools(self):
         call = json.dumps({"tool_calls": [{"name": "shell", "arguments": {"query": "touch /tmp/bad"}}]})
