@@ -140,7 +140,12 @@ class ServiceTests(unittest.TestCase):
                 return response.status, json.load(response)
 
         try:
-            self.assertEqual(send("/health")[0], 200)
+            for thinking in [True, False]:
+                agent.model.thinking = thinking
+                status, health = send("/health")
+                self.assertEqual(status, 200)
+                self.assertEqual(health["thinking_enabled"], thinking)
+                self.assertEqual(health["thinking_budget"], 1024 if thinking else 0)
             status, result = send("/prepare", b'{"message":"Deploy atlas"}')
             self.assertEqual(status, 200)
             self.assertEqual(result["status"], "prepared")

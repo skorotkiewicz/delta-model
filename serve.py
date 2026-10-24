@@ -193,7 +193,7 @@ class Resources:
 
 class Qwen:
     def __init__(self, model_path, device="auto", threads=2, max_new_tokens=256,
-                 max_input_tokens=4096, thinking_budget=1024):
+                 max_input_tokens=4096, thinking_budget=1024, thinking=True):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -204,6 +204,7 @@ class Qwen:
         self.max_new_tokens = max_new_tokens
         self.max_input_tokens = max_input_tokens
         self.thinking_budget = thinking_budget
+        self.thinking = thinking
         self.tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             str(model_path), local_files_only=True,
@@ -212,13 +213,18 @@ class Qwen:
 
     def generate(self, messages):
         text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=True)
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.thinking)
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         if inputs.input_ids.shape[1] > self.max_input_tokens:
             raise RequestError("Context exceeds the model input budget. Shorten message or saved context.", 413)
-        sampling = dict(do_sample=True, temperature=0.6, top_p=0.95, top_k=20,
+        sampling = dict(do_sample=True, temperature=0.6 if self.thinking else 0.7,
+                        top_p=0.95 if self.thinking else 0.8, top_k=20,
                         repetition_penalty=1.05, pad_token_id=self.tokenizer.eos_token_id)
         with self.torch.inference_mode():
+            if not self.thinking:
+                output = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, **sampling)
+                return self.tokenizer.decode(
+                    output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
             end_thinking = self.tokenizer.convert_tokens_to_ids("</think>")
             thought = self.model.generate(
                 **inputs, max_new_tokens=self.thinking_budget,
@@ -410,9 +416,10 @@ def handler_for(preparer):
 
         def do_GET(self):
             if self.path == "/health":
+                thinking = getattr(preparer.model, "thinking", True)
                 self.send_json(200, {"status": "ok", "model": "Qwen3-0.6B", "device": preparer.model.device,
-                                     "thinking_enabled": True,
-                                     "thinking_budget": getattr(preparer.model, "thinking_budget", 1024)})
+                                     "thinking_enabled": thinking,
+                                     "thinking_budget": getattr(preparer.model, "thinking_budget", 1024) if thinking else 0})
             else:
                 self.send_json(404, {"error": "Use GET /health or POST /prepare."})
 
@@ -464,6 +471,8 @@ def main():
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--thinking", choices=["on", "off"], default="on",
+                        help="Enable or disable Qwen thinking, default: on")
     parser.add_argument("--thinking-budget", type=int, default=1024,
                         help="Maximum thinking tokens before generating final JSON, default: 1024")
     args = parser.parse_args()
@@ -475,7 +484,7 @@ def main():
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     LOG.info("Loading local Qwen weights from %s", args.model)
     model = Qwen(args.model, args.device, args.threads, args.max_new_tokens,
-                 thinking_budget=args.thinking_budget)
+                 thinking_budget=args.thinking_budget, thinking=args.thinking == "on")
     preparer = Preparer(model, Store(args.db), Resources(args.resources))
     server = ThreadingHTTPServer((args.host, args.port), handler_for(preparer))
     LOG.info("Ready at http://%s:%s on %s", args.host, args.port, model.device)

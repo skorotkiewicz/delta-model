@@ -19,7 +19,13 @@ The existing `.venv` has the model dependencies. For a new environment, install
 
 The weights load once at startup, entirely from local files. CPU inference uses
 two threads and float32 by default. CUDA is selected automatically when available.
-Qwen's thinking mode is enabled. Each model turn has up to 1024 thinking tokens,
+Qwen's thinking mode is enabled by default. Use `--thinking off` to disable it:
+
+```sh
+.venv/bin/python serve.py --port 8765 --thinking off
+```
+
+Use `--thinking on` to enable it explicitly. When enabled, each model turn has up to 1024 thinking tokens,
 followed by a separate budget for the final JSON. `--thinking-budget` adjusts this
 limit. The service closes the thinking phase when the budget is reached, following
 the [Qwen thinking budget example](https://qwen.readthedocs.io/en/latest/getting_started/quickstart.html#thinking-budget).
@@ -124,4 +130,4 @@ session separation, input validation, fallbacks, resource boundaries, and HTTP
 responses. Test real model quality separately with the curl requests above.
 
 Other options are listed by `python serve.py --help`, including `--model`,
-`--resources`, `--device`, `--threads`, `--max-new-tokens`, and `--thinking-budget`.
+`--resources`, `--device`, `--threads`, `--max-new-tokens`, `--thinking`, and `--thinking-budget`.
