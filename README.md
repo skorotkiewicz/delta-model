@@ -5,8 +5,9 @@ larger model. It returns JSON containing a short instruction, missing informatio
 retrieved context, tool results, and ready-to-send `handoff.messages`.
 This version stops at the handoff. It does not call a larger model.
 
-The [Pi extension](pi-extension/README.md) connects this handoff to Pi's selected
-model. Load it with `pi -e ./pi-extension/index.ts` after starting the server.
+The [Pi extension](pi-extension/README.md) sends only `preparation.prompt` to Pi's
+selected model. Qwen puts relevant retrieved facts into that prompt. Load the
+extension with `pi -e ./pi-extension/index.ts` after starting the server.
 
 ## Run
 

@@ -1,11 +1,12 @@
 # Pi extension for the Qwen proxy
 
-This extension sends each user prompt to the local Qwen proxy, then gives the
-preparation and retrieved context to Pi's selected model. Pi calls its model and
-returns the final answer through its normal interface.
+This extension sends each user prompt to the Qwen proxy, then sends only
+`preparation.prompt` to Pi's selected model. Qwen's prompt includes the relevant
+facts it gathered through tools and memory. Pi calls its model and returns the
+final answer through its normal interface.
 
 ```text
-User → Pi extension → Qwen ↔ proxy tools/memory → Pi's selected model → User
+User prompt → Qwen ↔ tools/memory → improved prompt → Pi's selected model → User
 ```
 
 The Python service still returns JSON handoffs. The extension connects those
@@ -52,19 +53,24 @@ The extension was checked with Pi 1.4.0 and Node 24.
 | `/qwen` or `/qwen status` | Show enablement, endpoint and proxy session ID |
 | `/qwen off` | Send subsequent prompts directly to Pi's model |
 | `/qwen on` | Resume Qwen preparation |
-| `/qwen last` | Show the last prepared prompt, missing information and warnings |
+| `/qwen last` | Show the last full JSON response for debugging, including after `/qwen off` |
 
-The footer shows preparation progress. Preparations are stored as hidden custom
-messages in Pi's session, available to its model. `/qwen last` shows a widget in the
-interactive UI; non-interactive diagnostics go to stderr. The original user prompt,
-attachments, system instructions and tools remain in Pi's conversation.
+The footer shows preparation progress. Your original text stays in Pi's transcript.
+The extension records the improved prompt and full response in a hidden session
+message, then projects only the improved prompt into the user message sent to the
+model. This also works on later tool turns and when resuming a saved session.
+Hidden proxy messages and legacy JSON handoffs are removed from provider requests.
+Pi's system instructions, attachments and tools are preserved.
 
-The main model receives the prepared prompt, missing-information questions, memory,
-resource excerpts, submitted storage, and results of Qwen's internal tools. It treats
-these as reference data. The proxy's system message does not replace Pi's system
-prompt. Only the current prompt's preparation is included in provider context;
-older preparations stay in the session log. Qwen only sees prompt text. Image
-attachments go directly to Pi's model.
+The model does not receive separate memories, tool traces, status, warnings, or
+`missing_information` JSON. Qwen is instructed to put relevant facts and necessary
+clarification instructions directly into the improved prompt. `/qwen last` shows
+the full JSON in a widget; non-interactive diagnostics go to stderr. Qwen sees
+prompt text, while image attachments go directly to Pi's model.
+
+Fact selection is performed by Qwen. A detail omitted from its rewrite will not
+reach Pi's model through a separate context payload. Use `/qwen last` to compare
+the prepared prompt with the retrieved facts.
 
 ## Configuration
 
@@ -91,8 +97,8 @@ durable memories or upload repository files.
 
 If the proxy is down, times out, rejects a large prompt or returns invalid JSON,
 Pi receives the original prompt and a warning is shown. The extension does not
-retry automatically. A server fallback is passed along with its context and a
-warning. Cancelling Pi or changing sessions aborts the extension's HTTP wait;
+retry automatically. For a server fallback, its `preparation.prompt` is used and a
+warning is shown. Cancelling Pi or changing sessions aborts the extension's HTTP wait;
 the Python server may finish inference already in progress.
 
 ## Checks and research
@@ -101,10 +107,11 @@ the Python server may finish inference already in progress.
 node --test pi-extension/test/*.test.ts
 ```
 
-Tests cover HTTP calls, context preservation, command toggles, old-context removal,
-session separation, input/response limits, timeouts, and cancellation. If Pi is
-installed, a CLI test runs against local mock proxy and model endpoints, checking
-that the model receives the original prompt, Qwen context, and Pi's `read` tool.
+Tests cover HTTP calls, prompt replacement, images, repeated prompts, command
+toggles, session separation, input/response limits, timeouts, and cancellation.
+If Pi is installed, a CLI test runs against local mock proxy and model endpoints,
+checking that only the improved prompt reaches the model alongside Pi's `read`
+tool. It also checks that the original prompt and JSON stay in the session log.
 It makes no external model calls and uses an isolated Pi configuration directory.
 
 To test the installed Pi CLI with real Qwen and a local mock main model:
@@ -114,8 +121,8 @@ QWEN_PROXY_LIVE_URL=http://127.0.0.1:8765/prepare \
   node --test pi-extension/test/pi.test.ts
 ```
 
-The implementation uses `before_agent_start` to add context after prompt expansion,
-`context` to remove outdated preparations from provider requests, and session
+The implementation uses `before_agent_start` to prepare prompts after expansion,
+`context` to project the rewritten user text and omit proxy metadata, and session
 lifecycle hooks for cleanup. References used were the installed Pi 1.4.0 docs and
 examples, plus the upstream [extension guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md),
 [event types](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/extensions/types.ts),

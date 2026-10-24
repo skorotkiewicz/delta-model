@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import extension from "../index.ts";
-import { config, contextMessage, parseHandoff, prepare, sessionId } from "../client.ts";
+import { config, parseHandoff, prepare, promptOnlyMessages, sessionId } from "../client.ts";
 
 function response(request: any, overrides: Record<string, unknown> = {}) {
   return {
@@ -86,14 +86,13 @@ test("validates configuration and mismatched or malformed handoffs", () => {
     response({ ...request, message: "different request" })]) {
     assert.throws(() => parseHandoff(bad, request));
   }
-  const content = contextMessage(parseHandoff(response(request), request));
-  assert.match(content, /Prefer Python/);
-  assert.match(content, /SQLite/);
-  assert.match(content, /Which bugs/);
-  assert.doesNotMatch(content, /A proxy instruction/);
+  const data = response(request);
+  const handoff = parseHandoff(data, request);
+  assert.deepEqual(handoff.response, data, "keep the full JSON for debugging");
+  assert.match(JSON.stringify(handoff.context), /Prefer Python/);
 });
 
-test("calls the actual HTTP preparation endpoint and injects context without changing the prompt or images", async (t) => {
+test("sends only the improved prompt to the model while preserving the original transcript and images", async (t) => {
   const server = await fixture(t);
   const h = harness(server.url);
   h.events.get("session_start")({}, h.ctx);
@@ -109,16 +108,69 @@ test("calls the actual HTTP preparation endpoint and injects context without cha
   assert.equal(result.systemPrompt, undefined);
   assert.equal(result.message.customType, "qwen-proxy");
   assert.equal(result.message.display, false);
-  assert.match(result.message.content, /SQLite/);
-  const userMessage = { role: "user", content: event.prompt };
+  assert.equal(result.message.content, "Fix the Python bugs and simplify the design.");
+  assert.match(JSON.stringify(result.message.details.response), /SQLite/);
+  const userMessage = { role: "user", content: [{ type: "text", text: event.prompt }, ...event.images] };
   const current = { role: "custom", ...result.message };
   const stale = { role: "custom", customType: "qwen-proxy", details: { request_id: "old" } };
   const tool = { role: "toolResult", content: "Keep tool results" };
   const filtered = h.events.get("context")({ messages: [stale, userMessage, current, tool] });
-  assert.deepEqual(filtered.messages, [userMessage, current, tool]);
+  assert.deepEqual(filtered.messages, [
+    { role: "user", content: [{ type: "text", text: "Fix the Python bugs and simplify the design." }, ...event.images] },
+    tool,
+  ]);
+  assert.equal(userMessage.content[0].text, event.prompt, "do not mutate Pi's session log");
+  assert.doesNotMatch(JSON.stringify(filtered.messages), /request_id|missing_information|Prefer Python|Which bugs/);
   assert.equal(server.requests.length, 1, "tool turns must not call Qwen again");
   await h.commands.get("qwen")("last", h.ctx);
   assert.match(JSON.stringify(h.widgets.at(-1)), /Which bugs/);
+  assert.match(JSON.stringify(h.widgets.at(-1)), /request_id/);
+});
+
+test("repeated prompts keep their own rewrites across tool turns and session reloads", () => {
+  const messages: any[] = [
+    { role: "user", content: "again" },
+    { role: "custom", customType: "qwen-proxy", content: "First improved prompt", details: { original_prompt: "again" } },
+    { role: "assistant", content: "First answer" },
+    { role: "user", content: "again" },
+    { role: "custom", customType: "qwen-proxy", content: "Second improved prompt", details: { original_prompt: "again" } },
+    { role: "custom", customType: "other-extension", content: "Keep me" },
+  ];
+  const expected = [messages[0], messages[2], messages[3], messages[5]].map((message) => ({ ...message }));
+  expected[0].content = "First improved prompt";
+  expected[2].content = "Second improved prompt";
+  assert.deepEqual(promptOnlyMessages(messages), expected);
+  assert.deepEqual(promptOnlyMessages(messages), expected, "projection must work again without in-memory request state");
+  assert.equal(messages[0].content, "again");
+});
+
+test("keeps Pi's image hints when replacing multi-block user text", () => {
+  const messages: any[] = [
+    { role: "user", content: [{ type: "text", text: "fix" }, { type: "text", text: "this\n\nImage size: 640x480" },
+      { type: "image", data: "image", mimeType: "image/png" }] },
+    { role: "custom", customType: "qwen-proxy", content: "Fix the UI layout.", details: { original_prompt: "fix\nthis" } },
+  ];
+  assert.deepEqual(promptOnlyMessages(messages)[0].content, [
+    { type: "text", text: "Fix the UI layout.\n\nImage size: 640x480" }, messages[0].content[2],
+  ]);
+});
+
+test("qwen off stops new requests and keeps the last JSON available for debugging", async (t) => {
+  const server = await fixture(t);
+  const h = harness(server.url);
+  const first = await h.events.get("before_agent_start")({ prompt: "fix and make nice" }, h.ctx);
+  await h.commands.get("qwen")("off", h.ctx);
+  await h.events.get("before_agent_start")({ prompt: "what was the prepared prompt?" }, h.ctx);
+  await h.commands.get("qwen")("last", h.ctx);
+  assert.match(JSON.stringify(h.widgets.at(-1)), /Fix the Python bugs/);
+  assert.equal(server.requests.length, 1);
+  const history = [
+    { role: "user", content: "fix and make nice" }, { role: "custom", ...first.message },
+    { role: "user", content: "what was the prepared prompt?" },
+  ];
+  assert.deepEqual(h.events.get("context")({ messages: history }).messages, [
+    { role: "user", content: "Fix the Python bugs and simplify the design." }, history[2],
+  ]);
 });
 
 test("disabled and custom-message runs skip Qwen", async (t) => {

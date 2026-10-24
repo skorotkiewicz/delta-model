@@ -1,11 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { config, contextMessage, prepare, sessionId, type Handoff } from "./client.ts";
+import { config, prepare, promptOnlyMessages, sessionId, type Handoff } from "./client.ts";
 
 const CUSTOM_TYPE = "qwen-proxy";
 
 export default function qwenProxy(pi: ExtensionAPI) {
   let enabled = process.env.QWEN_PROXY_ENABLED !== "0";
-  let activeRequestId: string | undefined;
   let last: Handoff | undefined;
   const pending = new Set<AbortController>();
 
@@ -29,16 +28,15 @@ export default function qwenProxy(pi: ExtensionAPI) {
   function cancelPending() {
     for (const controller of pending) controller.abort();
     pending.clear();
-    activeRequestId = undefined;
-    last = undefined;
   }
 
   pi.on("session_start", (_event, ctx) => {
     cancelPending();
+    last = undefined;
     ctx.ui.setStatus(CUSTOM_TYPE, enabled ? "Qwen: on" : "Qwen: off");
     ctx.ui.setWidget(CUSTOM_TYPE, undefined);
   });
-  pi.on("session_shutdown", () => cancelPending());
+  pi.on("session_shutdown", () => { cancelPending(); last = undefined; });
 
   pi.registerCommand("qwen", {
     description: "Qwen proxy: status, on, off, or last",
@@ -55,11 +53,7 @@ export default function qwenProxy(pi: ExtensionAPI) {
           notify(ctx, "No Qwen preparation in this session yet.", "info");
           return;
         }
-        const lines = [
-          `Qwen: ${last.preparation.prompt}`,
-          ...last.preparation.missing_information.map((question) => `Missing: ${question}`),
-          ...last.warnings.map((warning) => `Warning: ${warning}`),
-        ];
+        const lines = JSON.stringify(last.response, null, 2).split("\n");
         if (ctx.hasUI) ctx.ui.setWidget(CUSTOM_TYPE, lines);
         else console.error(lines.join("\n"));
       } else if (command === "status") {
@@ -80,8 +74,6 @@ export default function qwenProxy(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     // Older Pi versions did not include messageType. Custom background messages must not recurse.
     if (event.messageType === "custom" || !("prompt" in event) || typeof event.prompt !== "string") return;
-    activeRequestId = undefined;
-    last = undefined;
     ctx.ui.setWidget(CUSTOM_TYPE, undefined);
     if (!enabled || !event.prompt.trim()) return;
 
@@ -96,7 +88,6 @@ export default function qwenProxy(pi: ExtensionAPI) {
       }, { ...settings(), signal });
       signal.throwIfAborted();
       last = handoff;
-      activeRequestId = handoff.requestId;
       ctx.ui.setStatus(CUSTOM_TYPE, handoff.status === "prepared" ? "Qwen: ready" : "Qwen: fallback");
       if (handoff.status === "fallback" || handoff.warnings.length) {
         notify(ctx, "Qwen returned a fallback or warnings. Use /qwen last to inspect.", "warning");
@@ -104,9 +95,10 @@ export default function qwenProxy(pi: ExtensionAPI) {
       return {
         message: {
           customType: CUSTOM_TYPE,
-          content: contextMessage(handoff),
+          content: handoff.preparation.prompt,
           display: false,
-          details: { request_id: handoff.requestId, session_id: handoff.sessionId },
+          details: { request_id: handoff.requestId, session_id: handoff.sessionId,
+                     original_prompt: event.prompt, response: handoff.response },
         },
       };
     } catch (error) {
@@ -123,9 +115,6 @@ export default function qwenProxy(pi: ExtensionAPI) {
   });
 
   pi.on("context", (event) => ({
-    // Retain full session logs, but only send this request's preparation to the provider.
-    messages: event.messages.filter((message) => message.role !== "custom" ||
-      message.customType !== CUSTOM_TYPE || (activeRequestId !== undefined &&
-        (message.details as { request_id?: string } | undefined)?.request_id === activeRequestId)),
+    messages: promptOnlyMessages(event.messages),
   }));
 }

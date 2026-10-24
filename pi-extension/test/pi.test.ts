@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const hasPi = spawnSync("pi", ["--version"], { encoding: "utf8" }).status === 0;
 const liveProxy = process.env.QWEN_PROXY_LIVE_URL;
 
-test("installed Pi forwards original prompt, Qwen context and built-in tools to its model", {
+test("installed Pi sends only Qwen's improved prompt while keeping the original and JSON in its log", {
   skip: !hasPi && "Pi is not installed",
   timeout: liveProxy ? 330_000 : 30_000,
 }, async (t) => {
@@ -65,8 +65,9 @@ test("installed Pi forwards original prompt, Qwen context and built-in tools to 
     });
   }`);
   await mkdir(join(dir, "agent"));
+  const sessionFile = join(dir, "session.jsonl");
   const child = spawn("pi", [
-    "--offline", "--no-session", "--no-extensions", "--no-mcp", "--no-skills", "--no-themes",
+    "--offline", "--session", sessionFile, "--no-extensions", "--no-mcp", "--no-skills", "--no-themes",
     "--no-context-files", "--no-prompt-templates", "--tools", "read",
     "-e", fileURLToPath(new URL("../index.ts", import.meta.url)), "-e", provider,
     "--model", "qwen-proxy-test/check", "--api-key", "local-test", "-p", "fix and make nice",
@@ -94,15 +95,21 @@ test("installed Pi forwards original prompt, Qwen context and built-in tools to 
   const payload = requests.at(-1)!.body;
   const text = (message: any) => typeof message.content === "string" ? message.content :
     message.content.map((part: any) => part.text || "").join("\n");
-  assert.ok(payload.messages.some((message: any) => message.role === "user" && text(message) === "fix and make nice"));
-  const context = payload.messages.find((message: any) => text(message).includes("Qwen preparation for the current user request."));
-  assert.ok(context, "the model must receive Qwen context, not silently bypass the proxy");
+  const entries = (await readFile(sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const marker = entries.map((entry) => entry.type === "message" ? entry.message : entry)
+    .find((entry) => entry.customType === "qwen-proxy");
+  assert.ok(marker, "store the preparation for debugging");
+  assert.equal(marker.details.original_prompt, "fix and make nice");
+  assert.equal(marker.content, marker.details.response.preparation.prompt);
+  assert.deepEqual(payload.messages.filter((message: any) => message.role === "user").map(text), [marker.content]);
+  assert.ok(entries.some((entry) => entry.type === "message" && entry.message.role === "user" &&
+    text(entry.message) === "fix and make nice"), "keep the original text in Pi's log");
   if (liveProxy) {
-    assert.match(text(context), /"proxy_status": "prepared"/);
-    t.diagnostic(text(context));
+    assert.equal(marker.details.response.status, "prepared");
+    t.diagnostic(`Improved prompt sent to the model: ${marker.content}`);
   } else {
-    assert.match(text(context), /Keep SQLite/);
-    assert.match(text(context), /Which bugs/);
+    assert.equal(marker.content, "Fix the Python bugs. Keep SQLite.");
+    assert.doesNotMatch(JSON.stringify(payload.messages), /fix and make nice|Which bugs|missing_information|tool_results|proxy_status|local project facts/);
   }
   assert.ok(payload.tools.some((tool: any) => tool.function.name === "read"));
 });
