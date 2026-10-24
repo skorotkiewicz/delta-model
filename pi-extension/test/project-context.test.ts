@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { identities, ProjectContextCollector } from "../project-context.ts";
 
+test("extension configuration can disable optional project context", async () => {
+  const collector = new ProjectContextCollector({ QWEN_PROXY_CONTEXT: "0" });
+  assert.deepEqual(await collector.collect("/project", "inspect package.json", ["read"]),
+    { files: [], errors: [], checks: [], active_tools: [] });
+});
+
 test("collects bounded active files and manifests, excluding hidden and outside files", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "qwen-context-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

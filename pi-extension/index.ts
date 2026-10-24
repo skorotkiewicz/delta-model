@@ -1,14 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { config, postJson, prepare, promptOnlyMessages, sessionId, type Handoff } from "./client.ts";
 import { contentText, identities, ProjectContextCollector, type Check } from "./project-context.ts";
+import { loadEnvironment } from "./configuration.ts";
 
 const CUSTOM_TYPE = "qwen-proxy";
 
 export default function qwenProxy(pi: ExtensionAPI) {
-  let enabled = process.env.QWEN_PROXY_ENABLED !== "0";
+  const environment = loadEnvironment();
+  let enabled = environment.QWEN_PROXY_ENABLED !== "0";
   let last: Handoff | undefined;
   const pending = new Set<AbortController>();
-  const collector = new ProjectContextCollector();
+  const collector = new ProjectContextCollector(environment);
   type Feedback = { session_id: string; request_id: string; summary: string; status: string; files: string[]; checks: Check[]; url: string; ready: boolean };
   const feedbacks = new Map<string, Feedback>();
   let activeRequest: string | undefined;
@@ -27,11 +29,11 @@ export default function qwenProxy(pi: ExtensionAPI) {
   });
 
   const settings = () => config(
-    String(pi.getFlag("qwen-proxy-url") || process.env.QWEN_PROXY_URL || "http://127.0.0.1:8765/prepare"),
-    String(pi.getFlag("qwen-proxy-timeout") || process.env.QWEN_PROXY_TIMEOUT_MS || "300000"),
+    String(pi.getFlag("qwen-proxy-url") || environment.QWEN_PROXY_URL || "http://127.0.0.1:8765/prepare"),
+    String(pi.getFlag("qwen-proxy-timeout") || environment.QWEN_PROXY_TIMEOUT_MS || "300000"),
   );
   const scopeIds = (ctx: ExtensionContext) => ({
-    session_id: sessionId(ctx.cwd, ctx.sessionManager.getSessionId()), ...identities(ctx.cwd),
+    session_id: sessionId(ctx.cwd, ctx.sessionManager.getSessionId()), ...identities(ctx.cwd, environment),
   });
   const endpoint = (name: string) => new URL(name, settings().url).toString();
 
@@ -115,8 +117,8 @@ export default function qwenProxy(pi: ExtensionAPI) {
           notify(ctx, [
             `Qwen proxy ${enabled ? "on" : "off"}: ${settings().url}`,
             `Session: ${sessionId(ctx.cwd, ctx.sessionManager.getSessionId())}`,
-            `Project: ${identities(ctx.cwd).project_id}`,
-            `User: ${identities(ctx.cwd).user_id}`,
+            `Project: ${identities(ctx.cwd, environment).project_id}`,
+            `User: ${identities(ctx.cwd, environment).user_id}`,
           ].join("\n"), "info");
         } catch (error) {
           notify(ctx, error instanceof Error ? error.message : "Invalid Qwen configuration.", "error");

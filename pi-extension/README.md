@@ -130,6 +130,22 @@ are excluded. Use `/qwen remember` for preferences expressed in other forms.
 
 ## Configuration
 
+The extension reads an optional `.env` beside its `index.ts`. From the repository
+root, copy the example and edit the URL to point to your proxy:
+
+```sh
+cp pi-extension/.env.example pi-extension/.env
+```
+
+If you installed a copy in Pi's extensions directory, create or edit `.env` in
+that installed extension directory instead. The file is read when the extension
+loads; restart Pi or run `/reload` after changing it. The current project's `.env`
+is not loaded. Only `QWEN_PROXY_*` settings are used, without changing the process
+environment.
+
+Configuration precedence is CLI flags, exported environment variables, extension
+`.env`, then defaults. These settings can be exported or placed in `.env`:
+
 | Environment variable | Default |
 | --- | --- |
 | `QWEN_PROXY_URL` | `http://127.0.0.1:8765/prepare` |
@@ -147,6 +163,9 @@ pi -e ./pi-extension/index.ts --qwen-proxy-timeout 600000
 # or
 QWEN_PROXY_URL=http://192.168.0.124:8765/prepare pi -e ./pi-extension/index.ts
 ```
+
+For a proxy on another machine, set `QWEN_PROXY_URL` to its complete `/prepare`
+URL using that machine's hostname or IP address.
 
 The endpoint is the complete `/prepare` URL. Each Pi session gets a proxy session ID
 derived from its working directory and session ID. Resuming the same session reuses

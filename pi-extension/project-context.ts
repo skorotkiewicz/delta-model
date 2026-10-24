@@ -15,10 +15,10 @@ const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const TEXT_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".go", ".java", ".css", ".html", ".md", ".json", ".toml", ".yaml", ".yml", ".sql", ".sh", ".txt"]);
 const isCheck = (command: string) => /\b(?:pytest|unittest|vitest|jest)\b|\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|check|lint)\b|\b(?:cargo|go)\s+test\b|\bjust\s+(?:test|check|vet)\b/.test(command);
 
-export function identities(cwd: string) {
+export function identities(cwd: string, environment: NodeJS.ProcessEnv = process.env) {
   return {
-    project_id: process.env.QWEN_PROXY_PROJECT_ID || `project_${hash(resolve(cwd)).slice(0, 64)}`,
-    user_id: process.env.QWEN_PROXY_USER_ID || `user_${hash(hostname() + "\0" + userInfo().username).slice(0, 64)}`,
+    project_id: environment.QWEN_PROXY_PROJECT_ID || `project_${hash(resolve(cwd)).slice(0, 64)}`,
+    user_id: environment.QWEN_PROXY_USER_ID || `user_${hash(hostname() + "\0" + userInfo().username).slice(0, 64)}`,
   };
 }
 
@@ -30,12 +30,17 @@ export function contentText(content: unknown): string {
 }
 
 export class ProjectContextCollector {
+  private environment: NodeJS.ProcessEnv;
   private recentFiles: string[] = [];
   private errors: string[] = [];
   private recentChecks: Check[] = [];
   private turnFiles = new Set<string>();
   private turnChecks: Check[] = [];
   private calls = new Map<string, { name: string; args: Record<string, unknown> }>();
+
+  constructor(environment: NodeJS.ProcessEnv = process.env) {
+    this.environment = environment;
+  }
 
   reset() {
     this.recentFiles = [];
@@ -82,7 +87,7 @@ export class ProjectContextCollector {
   }
 
   async collect(cwd: string, prompt: string, activeTools: string[] = []): Promise<ProjectContext> {
-    if (process.env.QWEN_PROXY_CONTEXT === "0") return { files: [], errors: [], checks: [], active_tools: [] };
+    if (this.environment.QWEN_PROXY_CONTEXT === "0") return { files: [], errors: [], checks: [], active_tools: [] };
     const base = { files: [], errors: [...this.errors], checks: [...this.recentChecks], active_tools: activeTools.slice(0, 64) };
     const mentioned = prompt.match(/(?:[\w@.-]+\/)*[\w.-]+\.(?:tsx?|jsx?|py|rs|go|java|css|html|md|json|toml|ya?ml|sql|sh|txt)\b/g) || [];
     const candidates = [...new Set([...mentioned, ...this.recentFiles,
