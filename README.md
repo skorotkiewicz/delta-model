@@ -79,6 +79,9 @@ before producing its instruction:
 | `storage_get` | `{"key":"project"}` | Stored JSON value or `found: false` |
 | `resource_search` | `{"query":"..."}` | Text excerpts with relative paths and line numbers |
 
+When storage keys exist, a separate planning step asks Qwen to select tools first.
+If Qwen skips storage retrieval, the service retrieves up to three saved values
+and asks Qwen to prepare again. This intervention appears in `warnings`.
 The tool loop uses explicit JSON decisions, validates names and arguments, executes
 the calls, and supplies results to Qwen. It permits two tool rounds and three model
 generations total, including retries. Model-selected calls have `source: "qwen"`.
@@ -86,7 +89,8 @@ The tools have no shell execution or network access.
 
 Add project notes as `.md`, `.txt`, `.py`, or `.json` files under `resources/`.
 Resource search uses word overlap, reads files up to 128 KB, skips hidden paths
-and symlinks, and returns up to four excerpts. Memory search ranks the latest 200
+and symlinks, excludes model configuration and tokenizer files, and returns up to
+four excerpts. Memory search ranks the latest 200
 facts by word overlap and returns up to eight. These are simple local retrieval
 methods, not embeddings or a guarantee that every relevant fact will be found.
 

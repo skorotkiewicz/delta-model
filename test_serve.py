@@ -57,8 +57,11 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(handoff["context"]["resources"][0]["path"], "project.md")
 
     def test_persistence_history_and_session_isolation(self):
-        self.preparer(FINAL).prepare({"session_id": "alice", "message": "Plan atlas deployment.",
+        result = self.preparer(FINAL, FINAL).prepare({"session_id": "alice", "message": "Plan atlas deployment.",
                                      "memories": ["Prefer Python."], "storage": {"budget": 50}})
+        self.assertEqual(result["tool_calls"][-1]["result"]["value"], 50)
+        self.assertEqual(result["tool_calls"][-1]["source"], "automatic")
+        self.assertTrue(result["warnings"])
         reopened = Store(self.store.path)
         self.assertEqual(reopened.memory_search("alice", "Python"), ["Prefer Python."])
         self.assertEqual(reopened.storage_get("alice", "budget")["value"], 50)
