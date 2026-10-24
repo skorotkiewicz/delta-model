@@ -144,6 +144,8 @@ environment variables. This example runs from the cloned repository's root:
 
 ```sh
 pi -e ./pi-extension/index.ts --qwen-proxy-timeout 600000
+# or
+QWEN_PROXY_URL=http://192.168.0.124:8765/prepare pi -e ./pi-extension/index.ts
 ```
 
 The endpoint is the complete `/prepare` URL. Each Pi session gets a proxy session ID
