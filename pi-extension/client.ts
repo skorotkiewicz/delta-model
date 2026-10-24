@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { ProjectContext } from "./project-context.ts";
 
 export const DEFAULT_URL = "http://127.0.0.1:8765/prepare";
 export const DEFAULT_TIMEOUT_MS = 300_000;
@@ -11,6 +12,10 @@ export type PrepareRequest = {
   session_id: string;
   memories?: string[];
   storage?: Record<string, unknown>;
+  project_id?: string;
+  user_id?: string;
+  context?: ProjectContext;
+  learn_preferences?: boolean;
 };
 
 export type Preparation = { prompt: string; missing_information: string[] };
@@ -85,13 +90,13 @@ export function parseHandoff(data: unknown, request: PrepareRequest): Handoff {
   };
 }
 
-export async function prepare(
-  request: PrepareRequest,
+export async function postJson(
+  bodyValue: unknown,
   options: { url: string; timeoutMs: number; signal?: AbortSignal },
-): Promise<Handoff> {
-  const body = JSON.stringify(request);
-  if (!request.message.trim() || request.message.length > 8000 || Buffer.byteLength(body) > 32_768) {
-    throw new Error("Prompt exceeds the proxy limits. Pi will use the original prompt.");
+): Promise<unknown> {
+  const body = JSON.stringify(bodyValue);
+  if (Buffer.byteLength(body) > 32_768) {
+    throw new Error("Request exceeds the proxy limits.");
   }
   const timeout = AbortSignal.timeout(options.timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -132,7 +137,21 @@ export async function prepare(
   } catch {
     throw new Error("Qwen proxy returned invalid JSON.");
   }
-  return parseHandoff(data, request);
+  return data;
+}
+
+export async function prepare(
+  request: PrepareRequest,
+  options: { url: string; timeoutMs: number; signal?: AbortSignal },
+): Promise<Handoff> {
+  if (!request.message.trim() || request.message.length > 8000) {
+    throw new Error("Prompt exceeds the proxy limits. Pi will use the original prompt.");
+  }
+  // Prefer dropping optional context to bypassing Qwen for a long user prompt.
+  const bounded = structuredClone(request);
+  while (Buffer.byteLength(JSON.stringify(bounded)) > 32_768 && bounded.context?.files.length) bounded.context.files.pop();
+  if (Buffer.byteLength(JSON.stringify(bounded)) > 32_768) delete bounded.context;
+  return parseHandoff(await postJson(bounded, options), request);
 }
 
 export function promptOnlyMessages(messages: AgentMessage[]): AgentMessage[] {

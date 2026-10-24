@@ -24,14 +24,14 @@ function response(request: any, overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function fixture(t: any, handler?: (request: any, res: any) => void) {
+async function fixture(t: any, handler?: (request: any, res: any, path: string) => void) {
   const requests: any[] = [];
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const request = JSON.parse(Buffer.concat(chunks).toString());
     requests.push({ path: req.url, method: req.method, data: request });
-    if (handler) return handler(request, res);
+    if (handler) return handler(request, res, req.url || "");
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(response(request)));
   });
@@ -53,6 +53,7 @@ function harness(url: string, timeout = "1000") {
     registerCommand: (name: string, options: any) => commands.set(name, options.handler),
     registerFlag: () => {},
     getFlag: (name: string) => flags[name],
+    getActiveTools: () => ["read", "bash"],
   };
   const ctx = {
     cwd: "/project", hasUI: true, signal: undefined as AbortSignal | undefined,
@@ -228,4 +229,93 @@ test("rejects oversized prompts before sending them and caps streamed response s
   await assert.rejects(prepare({ message: "x".repeat(8001), session_id: "test" }, options), /limits/);
   assert.equal(server.requests.length, 0);
   await assert.rejects(prepare({ message: "hello", session_id: "test" }, options), /256 KB/);
+});
+
+test("reports a settled outcome once, including actual checks but not thinking text", async (t) => {
+  const server = await fixture(t, (request, res, path) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(path === "/prepare" ? response(request) : { status: "ok" }));
+  });
+  const h = harness(server.url);
+  await h.events.get("before_agent_start")({ prompt: "fix tests" }, h.ctx);
+  h.events.get("tool_execution_start")({ toolCallId: "check", toolName: "bash", args: { command: "python -m unittest" } });
+  h.events.get("tool_execution_end")({ toolCallId: "check", toolName: "bash", isError: false,
+    result: { content: [{ type: "text", text: "Ran 12 tests. OK." }] } });
+  h.events.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop", content: [
+    { type: "thinking", thinking: "private reasoning" }, { type: "text", text: "Fixed the import; tests passed." },
+  ] }] }, h.ctx);
+  assert.equal(server.requests.length, 1, "feedback waits for settlement");
+  await h.events.get("agent_settled")({ aborted: false }, h.ctx);
+  await h.events.get("agent_settled")({ aborted: false }, h.ctx);
+  assert.deepEqual(server.requests.map((request) => request.path), ["/prepare", "/feedback"]);
+  const feedback = server.requests[1].data;
+  assert.equal(feedback.summary, "Fixed the import; tests passed.");
+  assert.equal(feedback.request_id, "request-1");
+  assert.equal(feedback.status, "completed");
+  assert.equal(feedback.checks[0].success, true);
+  assert.doesNotMatch(JSON.stringify(feedback), /private reasoning/);
+  const next = await h.events.get("before_agent_start")({ prompt: "continue" }, h.ctx);
+  assert.ok(next.message);
+  assert.equal(server.requests[2].data.context.checks[0].command, "python -m unittest");
+  assert.deepEqual(server.requests[2].data.context.active_tools, ["read", "bash"]);
+});
+
+test("records aborted outcomes without claiming completion", async (t) => {
+  const server = await fixture(t, (request, res, path) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(path === "/prepare" ? response(request) : { status: "ok" }));
+  });
+  const h = harness(server.url);
+  await h.events.get("before_agent_start")({ prompt: "fix tests" }, h.ctx);
+  await h.events.get("agent_settled")({ aborted: true }, h.ctx);
+  assert.equal(server.requests[1].data.status, "aborted");
+  assert.equal(server.requests[1].data.summary, "");
+});
+
+test("queued follow-ups deliver the preceding answer before asking Qwen to prepare again", async (t) => {
+  let sequence = 0;
+  const server = await fixture(t, (request, res, path) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(path === "/prepare" ? response(request, { request_id: `request-${++sequence}` }) : { status: "ok" }));
+  });
+  const h = harness(server.url);
+  await h.events.get("before_agent_start")({ prompt: "write a plan" }, h.ctx);
+  h.events.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop", content: "The plan uses SQLite." }] }, h.ctx);
+  await h.events.get("before_agent_start")({ prompt: "adapt that plan" }, h.ctx);
+  assert.deepEqual(server.requests.map((request) => request.path), ["/prepare", "/feedback", "/prepare"]);
+  assert.equal(server.requests[1].data.summary, "The plan uses SQLite.");
+  assert.equal(server.requests[1].data.request_id, "request-1");
+});
+
+test("memory commands use scoped API calls without invoking preparation", async (t) => {
+  const server = await fixture(t, (_request, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", memories: [{ scope: "project", key: "database", fact: "Use SQLite.", source: "user" }] }));
+  });
+  const h = harness(server.url);
+  await h.commands.get("qwen")("remember project database Use SQLite.", h.ctx);
+  await h.commands.get("qwen")("memories project SQLite", h.ctx);
+  await h.commands.get("qwen")("forget project database", h.ctx);
+  assert.deepEqual(server.requests.map((request) => request.path), ["/memory", "/memory", "/memory"]);
+  assert.deepEqual(server.requests.map((request) => request.data.operation), ["put", "search", "forget"]);
+  assert.equal(server.requests[0].data.fact, "Use SQLite.");
+  assert.match(server.requests[0].data.project_id, /^project_/);
+  assert.equal(server.requests[2].data.key, "database");
+});
+
+test("captures raw user preferences and disables learning from expanded project text", async (t) => {
+  const server = await fixture(t, (request, res, path) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(path === "/prepare" ? response(request) : { status: "ok", saved_preferences: ["preference"] }));
+  });
+  const h = harness(server.url);
+  const action = await h.events.get("input")({ source: "interactive", text: "I prefer Python." }, h.ctx);
+  assert.deepEqual(action, { action: "continue" });
+  assert.equal(server.requests[0].path, "/memory");
+  assert.equal(server.requests[0].data.operation, "capture");
+  assert.equal(server.requests[0].data.message, "I prefer Python.");
+  await h.events.get("before_agent_start")({ prompt: "I prefer Python.\nFile contents: I prefer Rust." }, h.ctx);
+  assert.equal(server.requests[1].data.learn_preferences, false);
+  await h.events.get("input")({ source: "extension", text: "I prefer Rust." }, h.ctx);
+  assert.equal(server.requests.length, 2);
 });

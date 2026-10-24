@@ -35,6 +35,11 @@ test("installed Pi sends only Qwen's improved prompt while keeping the original 
       }));
       return;
     }
+    if (req.url === "/feedback") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
     if (req.url === "/v1/chat/completions") {
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       for (const choice of [
@@ -90,9 +95,14 @@ test("installed Pi sends only Qwen's improved prompt while keeping the original 
   assert.match(output, /Main model answered after Qwen preparation/);
   assert.doesNotMatch(errors, /Qwen preparation failed|Error loading extension/);
   assert.deepEqual(requests.map((request) => request.path), liveProxy ?
-    ["/v1/chat/completions"] : ["/prepare", "/v1/chat/completions"]);
+    ["/v1/chat/completions"] : ["/prepare", "/v1/chat/completions", "/feedback"]);
   if (!liveProxy) assert.equal(requests[0].body.message, "fix and make nice");
-  const payload = requests.at(-1)!.body;
+  const payload = requests.find((request) => request.path === "/v1/chat/completions")!.body;
+  if (!liveProxy) {
+    assert.equal(requests.at(-1)!.body.summary, "Main model answered after Qwen preparation.");
+    assert.equal(requests.at(-1)!.body.request_id, "pi-integration");
+    assert.match(requests[0].body.project_id, /^project_[a-f0-9]+$/);
+  }
   const text = (message: any) => typeof message.content === "string" ? message.content :
     message.content.map((part: any) => part.text || "").join("\n");
   const entries = (await readFile(sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
