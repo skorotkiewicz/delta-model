@@ -3,8 +3,8 @@
 This extension sends each user prompt to the Qwen proxy, then sends only
 `preparation.prompt` to Pi's selected model. Qwen's prompt includes the relevant
 facts gathered through tools and memory. The server also appends clarification
-questions and preserves matching explicit constraints in plain text. Pi calls its model and returns the
-final answer through its normal interface.
+questions and preserves matching explicit constraints in plain text. Pi calls its
+model and returns the final answer through its normal interface.
 
 ```text
 User prompt → Qwen ↔ tools/memory → improved prompt → Pi's selected model → User
@@ -19,13 +19,18 @@ the proxy for future requests. This feedback does not run another Qwen generatio
 
 ## Use
 
-Start the proxy in one terminal:
+First follow the [proxy setup instructions](../README.md#run) to clone the
+repository, install Python dependencies and download the model. You also need
+Node.js 22.19 or newer and [Pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent)
+installed and configured with a model provider.
+
+Start the proxy in one terminal, from the cloned repository's root:
 
 ```sh
 .venv/bin/python serve.py --port 8765
 ```
 
-From the repository root, start Pi with the extension:
+In a second terminal, also from the repository root, start Pi with the extension:
 
 ```sh
 pi -e ./pi-extension/index.ts
@@ -38,15 +43,27 @@ your model API keys. You can also load the package directory:
 pi -e ./pi-extension
 ```
 
-To use it from another project, supply the absolute path:
+To use it in another project, Pi needs the path to your own clone. Start in the
+cloned repository's root and save its absolute path before changing directories.
+Replace `/path/to/your/project` below with the project you want Pi to work on:
 
 ```sh
-pi -e /home/mod/Dev/proofs/delta-model/pi-extension/index.ts
+QWEN_PROXY_REPO="$(pwd -P)"
+cd /path/to/your/project
+pi -e "$QWEN_PROXY_REPO/pi-extension/index.ts"
 ```
 
-For a persistent installation in a chosen project, run `pi install -l` with that
-absolute package-directory path. No Pi settings are changed by this repository
-automatically. Runtime dependencies come from Node and Pi; no npm install is needed.
+To keep the extension enabled in that project, run this from the same terminal,
+in your project's directory, after exiting Pi:
+
+```sh
+pi install -l "$QWEN_PROXY_REPO/pi-extension"
+pi
+```
+
+The `-l` flag saves the package in that project's Pi settings. Keep the clone at
+the same location while using this installation. Runtime dependencies come from
+Node and Pi; no npm install is needed in `pi-extension/`.
 The extension was checked with Pi 1.4.0 and Node 24.
 
 ## Controls
@@ -123,7 +140,7 @@ are excluded. Use `/qwen remember` for preferences expressed in other forms.
 | `QWEN_PROXY_CONTEXT` | Enabled; set `0` to omit optional project context from preparation |
 
 The flags `--qwen-proxy-url` and `--qwen-proxy-timeout` override their corresponding
-environment variables:
+environment variables. This example runs from the cloned repository's root:
 
 ```sh
 pi -e ./pi-extension/index.ts --qwen-proxy-timeout 600000
@@ -147,6 +164,8 @@ warning is shown. Cancelling Pi or changing sessions aborts the extension's HTTP
 the Python server may finish inference already in progress.
 
 ## Checks and research
+
+Run these checks from the repository root with Node.js 22.19 or newer:
 
 ```sh
 node --test pi-extension/test/*.test.ts

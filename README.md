@@ -1,18 +1,31 @@
 # Qwen request proxy
 
-A local HTTP service that uses `resources/data-3-0.6b` to prepare requests for a
+A local HTTP service that uses Qwen3-0.6B to prepare requests for a
 larger model. It returns JSON containing a short instruction, missing information,
 retrieved context, tool results, and ready-to-send `handoff.messages`.
 This version stops at the handoff. It does not call a larger model.
 
 The [Pi extension](pi-extension/README.md) sends only `preparation.prompt` to Pi's
 selected model. The server combines Qwen's draft with explicit constraints,
-saved facts, recent errors and clarification questions. Load the
-extension with `pi -e ./pi-extension/index.ts` after starting the server.
+saved facts, recent errors and clarification questions. See the extension's
+[setup instructions](pi-extension/README.md#use) to connect it to Pi.
 
 ## Run
 
-Use Python 3.11 or newer with SQLite FTS5 support. On a fresh clone:
+You need Git and Python 3.11 or newer with SQLite FTS5 support. A GPU is optional.
+The initial dependency installation and model download require internet access.
+Model weights are excluded from Git; the downloader creates them locally.
+
+Clone the repository and enter it:
+
+```sh
+git clone https://github.com/skorotkiewicz/delta-model.git
+cd delta-model
+```
+
+The shell examples use a POSIX shell, such as Bash or Zsh on Linux, macOS or WSL.
+Run the following commands from the cloned repository's root. If your Python
+command is `python3`, use it instead of `python` to create the virtual environment.
 
 ```sh
 python -m venv .venv
@@ -22,12 +35,20 @@ python -m venv .venv
 ```
 
 The downloader fetches the [Qwen3-0.6B model](https://huggingface.co/Qwen/Qwen3-0.6B)
+into `resources/data-3-0.6b`, the server's default model directory. Rerun the same
+download command if interrupted. To preview the download, use
+`.venv/bin/python download_model.py --dry-run` before downloading.
+
+You can also choose a different model directory. Both commands must use the same
+path, relative to the repository root or absolute:
 
 ```sh
-# Optional: select a destination or pin a model revision.
-.venv/bin/python download_model.py --output /path/to/qwen --revision COMMIT_HASH
-.venv/bin/python serve.py --model /path/to/qwen --port 8765
+.venv/bin/python download_model.py --output ./resources/qwen3-0.6b
+.venv/bin/python serve.py --model ./resources/qwen3-0.6b --port 8765
 ```
+
+To pin a model version, add `--revision` followed by a Hugging Face commit hash to
+the download command.
 
 The weights load once at startup, entirely from local files. CPU inference uses
 two threads and float32 by default. CUDA is selected automatically when available.
@@ -45,8 +66,13 @@ Thinking uses sampling at temperature 0.6, top-p 0.95, and top-k 20.
 Only final JSON enters tool history and HTTP responses. `/health` reports the
 thinking setting and budget. CPU requests take longer with thinking enabled.
 
+Leave the server running and open another terminal for the curl examples. They
+use port `8765`, selected by the startup command above. The server's CLI default
+without `--port` is `8000`. If you change the port, update the request URLs and
+the Pi extension's `QWEN_PROXY_URL` to match.
+
 ```sh
-curl --silent http://127.0.0.1:8765/health
+curl --silent --show-error http://127.0.0.1:8765/health
 
 curl --max-time 300 --silent --show-error \
   http://127.0.0.1:8765/prepare \
@@ -219,8 +245,10 @@ the service returns `status: "fallback"` with the original request and context.
 
 ## Check
 
+From the repository root, using the environment created above:
+
 ```sh
-python -m unittest -v test_serve test_infrastructure
+.venv/bin/python -m unittest -v test_serve test_infrastructure
 ```
 
 Tests use a scripted model to check the tool loop, context forwarding, persistence,
@@ -229,5 +257,5 @@ responses. Test real model quality separately with the curl requests above.
 SQLite must have FTS5 enabled. `protocol.py` contains validation and prompt
 assembly; `knowledge.py` contains scoped memory, indexes and feedback persistence.
 
-Other options are listed by `python serve.py --help`, including `--model`,
+Other options are listed by `.venv/bin/python serve.py --help`, including `--model`,
 `--resources`, `--device`, `--threads`, `--max-new-tokens`, `--thinking`, and `--thinking-budget`.
