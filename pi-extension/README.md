@@ -36,6 +36,9 @@ In a second terminal, also from the repository root, start Pi with the extension
 pi -e ./pi-extension/index.ts
 ```
 
+The proxy starts disabled. Run `/qwen on` in Pi to enable preparation for that
+session, or set `QWEN_PROXY_ENABLED=1` to start enabled.
+
 Use your usual Pi model selection and login. The extension does not need or manage
 your model API keys. You can also load the package directory:
 
@@ -53,7 +56,7 @@ cd /path/to/your/project
 pi -e "$QWEN_PROXY_REPO/pi-extension/index.ts"
 ```
 
-To keep the extension enabled in that project, run this from the same terminal,
+To keep the extension installed in that project, run this from the same terminal,
 in your project's directory, after exiting Pi:
 
 ```sh
@@ -150,7 +153,7 @@ Configuration precedence is CLI flags, exported environment variables, extension
 | --- | --- |
 | `QWEN_PROXY_URL` | `http://127.0.0.1:8765/prepare` |
 | `QWEN_PROXY_TIMEOUT_MS` | `300000` |
-| `QWEN_PROXY_ENABLED` | Enabled; set `0` to start disabled |
+| `QWEN_PROXY_ENABLED` | Disabled; set `1` to start enabled |
 | `QWEN_PROXY_PROJECT_ID` | Hash of the absolute working directory |
 | `QWEN_PROXY_USER_ID` | Hash of hostname and OS username |
 | `QWEN_PROXY_CONTEXT` | Enabled; set `0` to omit optional project context from preparation |

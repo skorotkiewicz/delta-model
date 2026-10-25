@@ -7,7 +7,7 @@ const CUSTOM_TYPE = "qwen-proxy";
 
 export default function qwenProxy(pi: ExtensionAPI) {
   const environment = loadEnvironment();
-  let enabled = environment.QWEN_PROXY_ENABLED !== "0";
+  let enabled = environment.QWEN_PROXY_ENABLED === "1";
   let last: Handoff | undefined;
   const pending = new Set<AbortController>();
   const collector = new ProjectContextCollector(environment);

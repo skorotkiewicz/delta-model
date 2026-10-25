@@ -57,5 +57,5 @@ test("exported environment and CLI flags override extension .env settings", asyn
 });
 
 test("missing extension .env keeps defaults and ignores the working directory .env", async (t) => {
-  assert.match(await status(t), /^Qwen proxy on: http:\/\/127\.0\.0\.1:8765\/prepare/);
+  assert.match(await status(t), /^Qwen proxy off: http:\/\/127\.0\.0\.1:8765\/prepare/);
 });

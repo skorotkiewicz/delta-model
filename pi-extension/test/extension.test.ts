@@ -41,7 +41,7 @@ async function fixture(t: any, handler?: (request: any, res: any, path: string) 
   return { url: `http://127.0.0.1:${address.port}/prepare`, requests };
 }
 
-function harness(url: string, timeout = "1000") {
+function harness(url: string, timeout = "1000", enabled = true) {
   const events = new Map<string, any>();
   const commands = new Map<string, any>();
   const notifications: string[] = [];
@@ -65,6 +65,11 @@ function harness(url: string, timeout = "1000") {
     },
   };
   extension(pi as any);
+  if (enabled) {
+    // Most scenarios exercise preparation after the user enables the proxy.
+    void commands.get("qwen")("on", ctx);
+    notifications.length = statuses.length = widgets.length = 0;
+  }
   return { events, commands, ctx, flags, notifications, statuses, widgets };
 }
 
@@ -174,11 +179,10 @@ test("qwen off stops new requests and keeps the last JSON available for debuggin
   ]);
 });
 
-test("disabled and custom-message runs skip Qwen", async (t) => {
+test("starts disabled, skips custom messages and prepares after /qwen on", async (t) => {
   const server = await fixture(t);
-  const h = harness(server.url);
+  const h = harness(server.url, "1000", false);
   await h.events.get("before_agent_start")({ messageType: "custom" }, h.ctx);
-  await h.commands.get("qwen")("off", h.ctx);
   await h.events.get("before_agent_start")({ messageType: "user", prompt: "hello" }, h.ctx);
   assert.equal(server.requests.length, 0);
   await h.commands.get("qwen")("on", h.ctx);
